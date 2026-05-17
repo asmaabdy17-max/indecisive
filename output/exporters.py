@@ -8,6 +8,7 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from io import BytesIO
 
 from storage.models import Provider
 
@@ -117,6 +118,134 @@ class CSVExporter(BaseExporter):
         return files
 
 
+class ExcelExporter(BaseExporter):
+    """Export provider data to Excel format with formatting."""
+
+    def export(
+        self,
+        db: Session,
+        filename: Optional[str] = None,
+        category: Optional[str] = None,
+        locality: Optional[str] = None,
+    ) -> str:
+        """Export providers to Excel with formatting."""
+        try:
+            query = db.query(Provider).filter_by(active=True)
+
+            if category:
+                query = query.filter(Provider.category.ilike(f"%{category}%"))
+            if locality:
+                query = query.filter(Provider.locality == locality)
+
+            providers = query.all()
+            logger.info(f"Exporting {len(providers)} providers to Excel")
+
+            if not filename:
+                filename = self._build_filename(category, locality) + ".xlsx"
+
+            filepath = os.path.join(self.output_dir, filename)
+
+            # Build data
+            data = []
+            for provider in providers:
+                data.append({
+                    "ID": provider.id,
+                    "Source": provider.source_platform,
+                    "Name": provider.provider_name,
+                    "Type": provider.teacher_or_business_type,
+                    "Description": provider.description,
+                    "Phone": provider.phone_number,
+                    "WhatsApp": provider.whatsapp_number,
+                    "Email": provider.email,
+                    "Website": provider.website,
+                    "Address": provider.full_address,
+                    "Locality": provider.locality,
+                    "Pincode": provider.pincode,
+                    "Latitude": provider.latitude,
+                    "Longitude": provider.longitude,
+                    "Category": provider.category,
+                    "Subcategory": provider.subcategory,
+                    "Rating": provider.rating,
+                    "Reviews": provider.review_count,
+                    "Experience (Yrs)": provider.years_experience,
+                    "Gender": provider.gender,
+                    "Languages": json.dumps(provider.languages_spoken) if provider.languages_spoken else "",
+                    "Subjects": json.dumps(provider.subjects_taught) if provider.subjects_taught else "",
+                    "Pricing": provider.pricing,
+                    "Home Service": "Yes" if provider.home_service_available else "No",
+                    "Online Classes": "Yes" if provider.online_classes_available else "No",
+                    "Scraped": provider.scraped_at.isoformat() if provider.scraped_at else "",
+                    "URL": provider.listing_url,
+                    "Quality Score": provider.data_quality_score,
+                })
+
+            df = pd.DataFrame(data)
+
+            # Create Excel writer
+            with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Providers', index=False)
+
+                # Format the worksheet
+                worksheet = writer.sheets['Providers']
+
+                # Set column widths
+                column_widths = {
+                    'A': 6,   # ID
+                    'B': 12,  # Source
+                    'C': 20,  # Name
+                    'D': 15,  # Type
+                    'E': 25,  # Description
+                    'F': 14,  # Phone
+                    'G': 14,  # WhatsApp
+                    'H': 18,  # Email
+                    'I': 20,  # Website
+                    'J': 25,  # Address
+                    'K': 15,  # Locality
+                    'L': 10,  # Pincode
+                    'M': 12,  # Latitude
+                    'N': 12,  # Longitude
+                    'O': 15,  # Category
+                    'P': 15,  # Subcategory
+                    'Q': 8,   # Rating
+                    'R': 8,   # Reviews
+                    'S': 12,  # Experience
+                    'T': 10,  # Gender
+                    'U': 20,  # Languages
+                    'V': 20,  # Subjects
+                    'W': 12,  # Pricing
+                    'X': 12,  # Home Service
+                    'Y': 14,  # Online Classes
+                    'Z': 18,  # Scraped
+                }
+
+                for col, width in column_widths.items():
+                    worksheet.column_dimensions[col].width = width
+
+                # Freeze header row
+                worksheet.freeze_panes = 'A2'
+
+                # Add summary sheet
+                summary_data = {
+                    'Metric': ['Total Providers', 'Unique Localities', 'Unique Categories', 'Export Date'],
+                    'Value': [
+                        len(providers),
+                        db.query(Provider.locality).distinct().count() if not locality else 1,
+                        db.query(Provider.category).distinct().count() if not category else 1,
+                        datetime.now().isoformat(),
+                    ]
+                }
+
+                summary_df = pd.DataFrame(summary_data)
+                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+
+            logger.info(f"Excel exported to {filepath}")
+            return filepath
+
+        except Exception as e:
+            logger.error(f"Error exporting to Excel: {str(e)}")
+            raise
+
+
 class JSONExporter(BaseExporter):
     """Export provider data to JSON format."""
 
@@ -224,4 +353,114 @@ class JSONExporter(BaseExporter):
 
         except Exception as e:
             logger.error(f"Error exporting summary: {str(e)}")
+            raise
+
+
+class PDFExporter(BaseExporter):
+    """Export provider data to PDF format."""
+
+    def export(
+        self,
+        db: Session,
+        filename: Optional[str] = None,
+        category: Optional[str] = None,
+        locality: Optional[str] = None,
+    ) -> str:
+        """Export providers to PDF."""
+        try:
+            from reportlab.lib.pagesizes import letter, A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+            from reportlab.lib import colors
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+            query = db.query(Provider).filter_by(active=True)
+
+            if category:
+                query = query.filter(Provider.category.ilike(f"%{category}%"))
+            if locality:
+                query = query.filter(Provider.locality == locality)
+
+            providers = query.all()
+            logger.info(f"Exporting {len(providers)} providers to PDF")
+
+            if not filename:
+                filename = self._build_filename(category, locality) + ".pdf"
+
+            filepath = os.path.join(self.output_dir, filename)
+
+            # Create PDF
+            doc = SimpleDocTemplate(filepath, pagesize=letter)
+            elements = []
+            styles = getSampleStyleSheet()
+
+            # Title
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=24,
+                textColor=colors.HexColor('#1f4788'),
+                spaceAfter=30,
+                alignment=TA_CENTER,
+            )
+            elements.append(Paragraph("Bangalore Educational Service Providers", title_style))
+            elements.append(Spacer(1, 0.3*inch))
+
+            # Summary
+            summary_style = styles['Normal']
+            summary_text = f"Total Providers: {len(providers)} | Locality: {locality or 'All'} | Category: {category or 'All'} | Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            elements.append(Paragraph(summary_text, summary_style))
+            elements.append(Spacer(1, 0.2*inch))
+
+            # Table data
+            table_data = [['Name', 'Phone', 'Email', 'Locality', 'Category', 'Rating']]
+
+            for provider in providers[:100]:  # Limit to 100 for PDF (too large otherwise)
+                table_data.append([
+                    provider.provider_name[:30] if provider.provider_name else '',
+                    provider.phone_number or '',
+                    provider.email or '',
+                    provider.locality or '',
+                    provider.category or '',
+                    str(provider.rating) if provider.rating else '',
+                ])
+
+            # Create table
+            table = Table(table_data, colWidths=[1.5*inch, 1.2*inch, 1.5*inch, 1.2*inch, 1.2*inch, 0.8*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+            ]))
+
+            elements.append(table)
+
+            # Note if truncated
+            if len(providers) > 100:
+                elements.append(Spacer(1, 0.2*inch))
+                note_style = ParagraphStyle('Note', parent=styles['Normal'], fontSize=8, textColor=colors.red)
+                elements.append(Paragraph(
+                    f"Note: Showing first 100 of {len(providers)} providers. Export to Excel for complete data.",
+                    note_style
+                ))
+
+            # Build PDF
+            doc.build(elements)
+
+            logger.info(f"PDF exported to {filepath}")
+            return filepath
+
+        except ImportError:
+            logger.error("reportlab not installed. Install with: pip install reportlab")
+            raise
+        except Exception as e:
+            logger.error(f"Error exporting to PDF: {str(e)}")
             raise

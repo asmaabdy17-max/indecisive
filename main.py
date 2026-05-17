@@ -10,7 +10,7 @@ from storage.database import init_database
 from utils.logger import setup_logger
 from scrapers.justdial_scraper import JustdialScraper
 from scrapers.sulekha_scraper import SulkhaScraper
-from output.exporters import CSVExporter, JSONExporter
+from output.exporters import CSVExporter, JSONExporter, ExcelExporter, PDFExporter
 
 
 def setup_logging(settings: Settings):
@@ -122,19 +122,36 @@ async def export_data(
     db_session = database.get_session()
 
     try:
-        if format_type.lower() == "csv":
+        format_type = format_type.lower()
+
+        if format_type == "csv":
             exporter = CSVExporter(settings.output_dir)
             filepath = exporter.export(db_session, category=category, locality=locality)
-        elif format_type.lower() == "json":
+            logger.info(f"CSV exported to {filepath}")
+
+        elif format_type == "json":
             exporter = JSONExporter(settings.output_dir)
             filepath = exporter.export(db_session, category=category, locality=locality)
             summary = exporter.export_summary(db_session)
+            logger.info(f"JSON exported to {filepath}")
             logger.info(f"Summary exported to {summary}")
+
+        elif format_type == "excel":
+            exporter = ExcelExporter(settings.output_dir)
+            filepath = exporter.export(db_session, category=category, locality=locality)
+            logger.info(f"Excel exported to {filepath}")
+
+        elif format_type == "pdf":
+            exporter = PDFExporter(settings.output_dir)
+            filepath = exporter.export(db_session, category=category, locality=locality)
+            logger.info(f"PDF exported to {filepath}")
+
         else:
             logger.error(f"Unknown export format: {format_type}")
             return False
 
-        logger.info(f"Data exported to {filepath}")
+        logger.info(f"✅ Data exported successfully!")
+        logger.info(f"📁 Location: {filepath}")
         return True
 
     except Exception as e:
@@ -205,7 +222,7 @@ Examples:
     scrape_parser.add_argument("--limit", type=int, help="Limit number of listings")
 
     export_parser = subparsers.add_parser("export", help="Export data")
-    export_parser.add_argument("--format", default="csv", choices=["csv", "json"], help="Export format")
+    export_parser.add_argument("--format", default="csv", choices=["csv", "json", "excel", "pdf"], help="Export format")
     export_parser.add_argument("--category", help="Filter by category")
     export_parser.add_argument("--locality", help="Filter by locality")
 
@@ -236,7 +253,7 @@ Examples:
             )
 
         elif args.command == "export":
-            asyncio.run(
+            success = asyncio.run(
                 export_data(
                     format_type=args.format,
                     category=args.category,
@@ -246,6 +263,8 @@ Examples:
                     logger=logger,
                 )
             )
+            if success:
+                logger.info(f"Export completed successfully as {args.format.upper()}")
 
         elif args.command == "status":
             asyncio.run(
